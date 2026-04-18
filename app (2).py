@@ -1,143 +1,152 @@
 import streamlit as st
-import cv2
-import numpy as np
-from PIL import Image
 import os
 import io
+import numpy as np
+from PIL import Image
 
 # ─────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────
-st.set_page_config(
-    page_title="Desi Chic Try-On",
-    page_icon="👗",
-    layout="wide"
-)
+st.set_page_config(page_title="Desi Chic Try-On", layout="wide")
 
 # ─────────────────────────────
-# CLEAN UI FIX (no code leakage)
+# CLEAN UI (NO HTML SHOW)
 # ─────────────────────────────
 st.markdown("""
 <style>
-.block-container {padding-top: 1rem;}
-#MainMenu, footer, header {visibility: hidden;}
+#MainMenu, footer, header {visibility:hidden;}
+.block-container {padding-top:1rem;}
+.stButton>button {width:100%; border-radius:8px; background:black; color:white;}
+img {border-radius:10px;}
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────
-# SMART TRY-ON FUNCTION (BEST POSSIBLE IN STREAMLIT)
+# TRY-ON FUNCTION (IMPROVED)
 # ─────────────────────────────
-def fit_dress(user_img, dress_path, y_pos, size):
-    user = np.array(user_img)
-    h, w = user.shape[:2]
+def apply_dress(user_img, dress_img, scale, y_shift):
+    user = user_img.convert("RGBA")
+    dress = dress_img.convert("RGBA")
 
-    dress = cv2.imread(dress_path, cv2.IMREAD_UNCHANGED)
-    if dress is None:
-        return user
+    uw, uh = user.size
 
     # resize dress
-    target_w = int(w * size)
-    scale = target_w / dress.shape[1]
-    target_h = int(dress.shape[0] * scale)
+    new_w = int(uw * scale)
+    aspect = dress.height / dress.width
+    new_h = int(new_w * aspect)
 
-    dress = cv2.resize(dress, (target_w, target_h))
+    dress = dress.resize((new_w, new_h))
 
-    x = w // 2 - target_w // 2
-    y = int(h * y_pos)
+    # position (center + adjustable)
+    x = (uw - new_w) // 2
+    y = int(uh * y_shift)
 
-    dh, dw = dress.shape[:2]
+    result = Image.new("RGBA", user.size)
+    result.paste(user, (0, 0))
 
-    if y + dh > h:
-        dh = h - y
-    if x + dw > w:
-        dw = w - x
+    result.alpha_composite(dress, (x, y))
 
-    dress = dress[:dh, :dw]
+    return result
 
-    # blending
-    if dress.shape[2] == 4:
-        alpha = dress[:, :, 3] / 255.0
-
-        for c in range(3):
-            user[y:y+dh, x:x+dw, c] = (
-                alpha * dress[:, :, c] +
-                (1 - alpha) * user[y:y+dh, x:x+dw, c]
-            )
-
-    return user.astype(np.uint8)
+# ─────────────────────────────
+# SESSION
+# ─────────────────────────────
+if "dress" not in st.session_state:
+    st.session_state.dress = None
 
 # ─────────────────────────────
 # TITLE
 # ─────────────────────────────
-st.markdown("<h1 style='text-align:center;'>DESI CHIC 👗</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;'>Virtual Try-On System</p>", unsafe_allow_html=True)
+st.title("👗 Desi Chic Virtual Try-On")
+st.write("Upload → Select → Adjust → Try On")
 
 # ─────────────────────────────
-# UPLOAD IMAGE
+# STEP 1 - UPLOAD
 # ─────────────────────────────
-uploaded = st.file_uploader("Upload Your Photo", type=["jpg","png","jpeg"])
+st.header("1. Upload Image")
+uploaded = st.file_uploader("Upload full body image", type=["png","jpg","jpeg"])
 
 user_img = None
 if uploaded:
-    user_img = Image.open(uploaded).convert("RGB")
-    st.image(user_img, caption="Your Image", width=250)
+    user_img = Image.open(uploaded)
+    st.image(user_img, width=250)
 
 # ─────────────────────────────
-# SELECT DRESS
+# STEP 2 - CATEGORY
 # ─────────────────────────────
-category = st.selectbox("Select Category", ["casual", "formal", "bridal"])
+st.header("2. Choose Dress")
 
-folder = f"dresses/{category}"
-os.makedirs(folder, exist_ok=True)
+category = st.selectbox("Category", ["casual", "formal", "bridal"])
 
-files = os.listdir(folder)
+folder = os.path.join("dresses", category)
 
-selected_dress = None
+if os.path.exists(folder):
+    files = [f for f in os.listdir(folder) if f.lower().endswith(("png","jpg","jpeg"))]
 
-st.subheader("Select Dress")
+    if files:
+        cols = st.columns(3)
 
-cols = st.columns(4)
+        for i, file in enumerate(files):
+            path = os.path.join(folder, file)
 
-for i, file in enumerate(files):
-    path = os.path.join(folder, file)
+            try:
+                img = Image.open(path)
 
-    with cols[i % 4]:
-        st.image(path, width=120)
+                with cols[i % 3]:
+                    st.image(img, width=150)
 
-        if st.button(f"Select {i}"):
-            selected_dress = path
-            st.session_state["dress"] = path
+                    if st.button("Select", key=path):
+                        st.session_state.dress = path
+
+            except:
+                st.error(f"Error loading {file}")
+    else:
+        st.warning("No dresses found")
+else:
+    st.warning("Folder missing")
 
 # ─────────────────────────────
-# SLIDERS
+# STEP 3 - ADJUSTMENT
 # ─────────────────────────────
-y_pos = st.slider("Vertical Position", 0.05, 0.5, 0.22)
-size = st.slider("Dress Size", 0.3, 0.9, 0.55)
+st.header("3. Adjust Fitting")
+
+scale = st.slider("Dress Size", 0.4, 0.9, 0.6)
+y_shift = st.slider("Vertical Position", 0.1, 0.4, 0.2)
 
 # ─────────────────────────────
-# TRY ON RESULT
+# STEP 4 - RESULT
 # ─────────────────────────────
-if user_img and "dress" in st.session_state:
+st.header("4. Result")
 
-    st.subheader("Your Result 👇")
+if user_img and st.session_state.dress:
 
-    result = fit_dress(
-        user_img,
-        st.session_state["dress"],
-        y_pos,
-        size
-    )
+    dress_img = Image.open(st.session_state.dress)
 
-    st.image(result, use_container_width=True)
+    with st.spinner("Applying dress..."):
+        result = apply_dress(user_img, dress_img, scale, y_shift)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Before")
+        st.image(user_img, use_container_width=True)
+
+    with col2:
+        st.subheader("After")
+        st.image(result, use_container_width=True)
 
     # download
-    result_img = Image.fromarray(result)
     buf = io.BytesIO()
-    result_img.save(buf, format="PNG")
+    result.save(buf, format="PNG")
 
     st.download_button(
         "Download Result",
         data=buf.getvalue(),
-        file_name="desi_chic_result.png",
+        file_name="tryon.png",
         mime="image/png"
     )
+
+elif not user_img:
+    st.info("Upload image first")
+else:
+    st.info("Select a dress first")
